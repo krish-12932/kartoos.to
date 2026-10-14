@@ -1,0 +1,4 @@
+.env
+profile/
+__pycache__/
+debug_*.png
