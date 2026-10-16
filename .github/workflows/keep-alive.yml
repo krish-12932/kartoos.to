@@ -1,0 +1,21 @@
+name: keep-alive (10-min ping)
+
+# Render free plan 15 min me sota hai — ye har 10 min /health ping
+# karke service ko zinda rakhta hai. Public repo pe Actions free hai.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://kartoos-bot.onrender.com/health) && echo "ping $i: HTTP $code" && exit 0
+            sleep 20
+          done
+          echo "ping fail"; exit 1

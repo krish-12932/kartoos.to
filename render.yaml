@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: kartoos-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && python -m playwright install --with-deps chromium
+    startCommand: python bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: UNATTENDED
+        value: "1"
+      - key: HTML_DUMP
+        value: "0"
+      - key: DELETE_AFTER_SEND
+        value: "1"
+      - key: BOT_TOKEN
+        sync: false
+      - key: ALLOWED_CHAT_IDS
+        sync: false
+      - key: KARTOONS_EMAIL
+        sync: false
+      - key: KARTOONS_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

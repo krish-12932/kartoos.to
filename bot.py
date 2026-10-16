@@ -19,6 +19,28 @@ PEND = []
 LOCK = threading.Lock()
 CUR = {"job": None}
 CANCEL = threading.Event()
+START_TS = time.time()
+def health_server():
+    """Render free plan ko zinda rakhne ke liye /health endpoint (stdlib only)."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    port = int(os.getenv("PORT", "10000") or "10000")
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"ok": True, "service": "kartoos-bot",
+                               "uptime_sec": int(time.time() - START_TS),
+                               "bot_token": bool(TOKEN),
+                               "queue": Q.qsize(),
+                               "paused": False}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *a): pass
+    try:
+        HTTPServer(("0.0.0.0", port), H).serve_forever()
+    except Exception as e:
+        print("[health] server fail:", e)
 def api(m, p=None, files=None, timeout=60):
     url = "%s/bot%s/%s" % (API, TOKEN, m)
     if files:
@@ -168,6 +190,7 @@ def handle(cid, t):
 def main():
     if not TOKEN: print("[bot] BOT_TOKEN nahi - .env me daalo."); return
     print("[bot] start | allowed=%s | del=%s" % (sorted(ALLOW) if ALLOW else ["(sab)"], DEL))
+    threading.Thread(target=health_server, daemon=True).start()
     threading.Thread(target=worker, daemon=True).start()
     try: api("getUpdates", {"offset": 0, "timeout": 1})
     except Exception: pass
