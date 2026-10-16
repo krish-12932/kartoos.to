@@ -183,13 +183,173 @@ def run_pipeline(title, season, ep, progress=None):
                 pass
 
 
+def _parse_queue_part(part):
+    """Ek queue entry parse karo -> dict. None = samajh nahi aaya."""
+    import re
+    p = part.strip()
+    if not p or p.startswith("#"):
+        return None
+    m = re.match(r'^(.*?)\s*[Ss](\d+)\s*[Ee](\d+)\s*$', p)
+    if m and m.group(1).strip():
+        return {"kind": "specific", "title": m.group(1).strip(),
+                "season": m.group(2), "ep": m.group(3), "raw": p}
+    toks = p.split()
+    def _is_num(t):
+        return re.fullmatch(r'[SsEe]?(\d+)', t) is not None
+    def _num(t):
+        mm = re.search(r'(\d+)', t)
+        return mm.group(1) if mm else None
+    if len(toks) >= 3 and _is_num(toks[-2]) and _is_num(toks[-1]):
+        title = " ".join(toks[:-2]).strip()
+        if title:
+            return {"kind": "specific", "title": title,
+                    "season": _num(toks[-2]), "ep": _num(toks[-1]), "raw": p}
+    if len(toks) >= 2 and _is_num(toks[-1]):
+        title = " ".join(toks[:-1]).strip()
+        if title:
+            return {"kind": "single", "title": title,
+                    "ep": _num(toks[-1]), "raw": p}
+    return {"kind": "full", "title": p, "raw": p}
+
+
+def _load_queue(path="queue.txt"):
+    """queue.txt padho -> [job, ...]. Comma wali line split hoti hai."""
+    from pathlib import Path
+    import os
+    qpath = Path(__file__).parent / path if not os.path.isabs(path) else Path(path)
+    if not qpath.exists():
+        return [], str(qpath)
+    jobs = []
+    for line in qpath.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        for part in [x.strip() for x in s.split(",")]:
+            if not part or part.startswith("#"):
+                continue
+            job = _parse_queue_part(part)
+            if job:
+                jobs.append(job)
+            else:
+                print("[queue] samajh nahi aaya, skip: %s" % part)
+    return jobs, str(qpath)
+
+
+def _run_queue(jobs):
+    """Queue ke saare jobs ek-ek karke chalao. Summary dict return karo."""
+    from modules.series import scan_series, detect_season, build_plan
+    ok = fail = skip = 0
+    n = len(jobs)
+    for i, job in enumerate(jobs, 1):
+        kind = job["kind"]
+        title = job["title"]
+        try:
+            if kind == "specific":
+                s, epn = job["season"], job["ep"]
+                ep_full = "S%sE%s" % (s, epn)
+                folder, video = make_db_paths(title, ep_full)
+                if video.exists() and video.stat().st_size > 0:
+                    print("\n[queue %d/%d] [skip] %s %s pehle se hai."
+                          % (i, n, title, ep_full))
+                    skip += 1
+                    continue
+                print("\n===== [queue %d/%d] %s — %s =====\n" % (i, n, title, ep_full))
+                r = run_pipeline(title, str(s), str(epn))
+                if r.get("ok"):
+                    ok += 1
+                else:
+                    fail += 1
+                    print("[queue] fail: %s" % r.get("error"))
+            elif kind == "single":
+                print("\n===== [queue %d/%d] %s ep %s (season detect) =====\n"
+                      % (i, n, title, job["ep"]))
+                bounds = scan_series(title)
+                if not bounds:
+                    print("[queue] scan fail: %s" % title)
+                    fail += 1
+                    continue
+                s = detect_season(bounds, job["ep"])
+                if s is None:
+                    print("[queue] ep %s nahi mila: %s" % (job["ep"], bounds))
+                    fail += 1
+                    continue
+                ep_full = "S%sE%s" % (s, job["ep"])
+                folder, video = make_db_paths(title, ep_full)
+                if video.exists() and video.stat().st_size > 0:
+                    print("[queue] [skip] %s %s pehle se hai." % (title, ep_full))
+                    skip += 1
+                    continue
+                print("[*] Ep %s -> Season %d. Download...\n" % (job["ep"], s))
+                r = run_pipeline(title, str(s), str(job["ep"]))
+                if r.get("ok"):
+                    ok += 1
+                else:
+                    fail += 1
+                    print("[queue] fail: %s" % r.get("error"))
+            else:
+                print("\n===== [queue %d/%d] FULL: %s =====\n" % (i, n, title))
+                bounds = scan_series(title)
+                if not bounds:
+                    print("[queue] scan fail: %s" % title)
+                    fail += 1
+                    continue
+                plan = build_plan(bounds)
+                print("[*] %d eps (%d seasons).\n" % (len(plan), len(bounds)))
+                for (s, epn) in plan:
+                    ep_full = "S%sE%s" % (s, epn)
+                    folder, video = make_db_paths(title, ep_full)
+                    if video.exists() and video.stat().st_size > 0:
+                        print("[skip] %s pehle se hai." % ep_full)
+                        skip += 1
+                        continue
+                    print("\n----- %s — %s -----\n" % (title, ep_full))
+                    r = run_pipeline(title, str(s), str(epn))
+                    if r.get("ok"):
+                        ok += 1
+                    else:
+                        fail += 1
+                        print("[!] %s fail: %s — aage." % (ep_full, r.get("error")))
+        except KeyboardInterrupt:
+            print("\n[queue] roka gaya: ok=%d fail=%d skip=%d" % (ok, fail, skip))
+            raise
+        except Exception as e:
+            fail += 1
+            print("[queue] crash (%s): %s — aage." % (job.get("raw"), e))
+    print("\n[queue done] ok=%d fail=%d skip=%d (jobs=%d)" % (ok, fail, skip, n))
+    return {"ok": ok, "fail": fail, "skip": skip}
+
+
 def main():
     """CLI wrapper.
 
     - Sirf anime naam  -> PURA series download (saare seasons, saari episodes).
     - Naam + ep number  -> khud dekhe wo ep kis season me hai, phir ussi ko download.
+    - Mode 2 (queue)    -> queue.txt ki list ek-ek karke download.
     """
     from modules.series import scan_series, detect_season, build_plan
+
+    mode = input("Mode? (1 = single, 2 = queue.txt) [1]: ").strip() or "1"
+
+    if mode == "2":
+        jobs, qpath = _load_queue("queue.txt")
+        if not jobs:
+            print("[queue] %s me koi kaam nahi. File me naam likho, phir chalao." % qpath)
+            print("Format: 'naruto' (full) | 'naruto 100' (single) | 'bleach 1 16' (specific)")
+            return
+        print("\n[queue] %d kaam mile (%s):" % (len(jobs), qpath))
+        for j in jobs:
+            if j["kind"] == "full":
+                print("  - FULL: %s" % j["title"])
+            elif j["kind"] == "single":
+                print("  - EP: %s ep %s (season auto)" % (j["title"], j["ep"]))
+            else:
+                print("  - S%sE%s: %s" % (j["season"], j["ep"], j["title"]))
+        ok_go = input("Shuru karu? (y/n) [y]: ").strip().lower() or "y"
+        if ok_go not in ("y", "yes", "h", "haan"):
+            print("[queue] cancel.")
+            return
+        _run_queue(jobs)
+        return
 
     title = input("Anime name likho (jaise naruto): ").strip() or "naruto"
     ep_in = input("Episode number (khaali chhodo = poora series): ").strip()

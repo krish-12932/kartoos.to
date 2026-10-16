@@ -1,0 +1,16 @@
+# Download Queue — ek line = ek kaam. Format:
+#
+#   pura series:      naruto
+#   ek episode:       naruto 100        (season khud detect hoga)
+#   specific:         bleach 1 16       (anime + season + episode)
+#   comment:          # ye line ignore hogi
+#   multiple:         comma se alag — naruto, doraemon
+#
+# Script upar se neeche ek-ek karke sab karegi.
+# Jo pehle se downloaded hai wo SKIP hoga.
+#
+# Example:
+# naruto
+# doraemon 5
+# bleach 1 16
+naruto

@@ -1,0 +1,95 @@
+name: queue-cron (raat ko queue.txt chalao)
+
+# PC off rahe tab bhi GitHub ke server pe download chale.
+# - KUCH delete nahi karta, sirf run_queue_ci.py chalata hai (app.py reuse).
+# - Purani galtiyon ke fix:
+#   1) Cloudflare headless fail -> xvfb headed + stealth flags (browser.py me hai)
+#      + UNATTENDED=1 (input par atakna band) + login secrets se.
+#   2) Render 512MB OOM -> GitHub runner 7GB RAM, isliye yahan OOM nahi.
+#   3) 6h job limit -> QUEUE_MAX_EPS=3 (ek run ~1.5-2h), timeout 330min.
+#   4) Runner wipe -> mp4/json artifact me upload (download kar lo).
+#   5) Overlap -> concurrency: ek run khatam tabhi dusra.
+
+on:
+  schedule:
+    # Roz raat 12:00 IST = 18:30 UTC
+    - cron: "30 18 * * *"
+  workflow_dispatch: {}  # manual "Run workflow" button se bhi chalega
+
+concurrency:
+  group: queue-cron
+  cancel-in-progress: false
+
+jobs:
+  queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330  # 5.5h — 6h limit se pehle stop
+    env:
+      UNATTENDED: "1"
+      HTML_DUMP: "1"
+      AUTO_FIND: "1"
+      AI_VISION: "1"
+      MANUAL_WAIT_SECS: "300"
+      QUEUE_MAX_EPS: "3"
+      QUEUE_TIMEOUT_MIN: "280"
+      PYTHONUTF8: "1"
+      PYTHONUNBUFFERED: "1"
+      KARTOONS_EMAIL: ${{ secrets.KARTOONS_EMAIL }}
+      KARTOONS_PASSWORD: ${{ secrets.KARTOONS_PASSWORD }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system deps (Chrome + xvfb + ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb ffmpeg gperf
+          # Real Chrome (Cloudflare bypass ke liye Playwright chromium nahi)
+          wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y /tmp/chrome.deb || sudo apt-get install -f -y
+          google-chrome-stable --version
+          xvfb-run --help | head -2
+          ffmpeg -version | head -1
+
+      - name: Install Python deps + Playwright
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium || python -m playwright install chromium || true
+
+      - name: Check secrets present (value print NAHI hogi)
+        run: |
+          python -c "import os; print('KARTOONS_EMAIL set:', bool(os.getenv('KARTOONS_EMAIL'))); print('KARTOONS_PASSWORD set:', bool(os.getenv('KARTOONS_PASSWORD'))); print('GEMINI set:', bool(os.getenv('GEMINI_API_KEY')))"
+
+      - name: Run queue (non-interactive)
+        run: |
+          python run_queue_ci.py
+        # NOTE: exit 1 = sab fail — job fail dikhega taaki pata chale
+
+      - name: Upload videos (mp4 + json)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos-${{ github.run_number }}
+          path: |
+            database/**/*.mp4
+            database/**/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload debug (fail hone par kaam aayega)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ github.run_number }}
+          path: |
+            html_dumps/**
+            debug_*.png
+          if-no-files-found: ignore
+          retention-days: 3
